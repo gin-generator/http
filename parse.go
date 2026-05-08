@@ -1,7 +1,6 @@
 package http
 
 import (
-	"errors"
 	"reflect"
 	"strconv"
 
@@ -14,46 +13,42 @@ const (
 )
 
 // Parse binds request data (JSON/form/query) and extracts path/query parameters into the struct.
-// It supports basic types: string, int, uint, bool, float.
+// JSON body binding (including nested structs, maps, slices) is handled by ShouldBind.
+// path/query tags are only supported on top-level scalar fields (string, int, uint, bool, float).
 //
 // Example:
 //
 //	type Request struct {
-//	    ID   int    `path:"id"`
-//	    Name string `json:"name"`
-//	    Page int    `query:"page"`
+//	    ID     int               `path:"id"`
+//	    Page   int               `query:"page"`
+//	    Name   string            `json:"name"`
+//	    Tags   []string          `json:"tags"`
+//	    Meta   map[string]string `json:"meta"`
 //	}
 //	var req Request
 //	if err := Parse(c, &req); err != nil {
 //	    // handle error
 //	}
 func Parse[T any](c *gin.Context, obj *T) error {
-	// Bind JSON/form data first
 	if err := c.ShouldBind(obj); err != nil {
 		return err
 	}
-
 	val := reflect.ValueOf(obj).Elem()
 	typ := val.Type()
-
 	for i := 0; i < val.NumField(); i++ {
-		field := val.Field(i)
-		if !field.CanSet() {
+		f := val.Field(i)
+		if !f.CanSet() {
 			continue
 		}
-
-		fieldType := typ.Field(i)
-		tag := fieldType.Tag
-
-		if err := parseField(c, &field, tag); err != nil {
+		if err := parseField(c, &f, typ.Field(i).Tag); err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
 
-// parseField parses a single field based on its type and tags.
+// parseField handles path/query tag injection for scalar fields.
+// struct/map/slice fields are json-only and already populated by ShouldBind — skip them.
 func parseField(c *gin.Context, field *reflect.Value, tag reflect.StructTag) error {
 	switch field.Kind() {
 	case reflect.String:
@@ -67,7 +62,8 @@ func parseField(c *gin.Context, field *reflect.Value, tag reflect.StructTag) err
 	case reflect.Float32, reflect.Float64:
 		return parseFloatField(c, field, tag)
 	default:
-		return errors.New("unsupported field type: " + field.Kind().String())
+		// map, slice, interface, etc. — already handled by ShouldBind, skip.
+		return nil
 	}
 }
 

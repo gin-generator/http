@@ -6,11 +6,11 @@
 
 ## 功能特性
 
-- 先通过 `c.ShouldBind` 绑定 JSON/form 数据。
-- 支持自定义结构体标签：
+- 先通过 `c.ShouldBind` 绑定 JSON/form 数据，通过 `json` 标签支持任意层嵌套的 struct、map、slice。
+- 在顶层标量字段上支持自定义标签：
   - `path:"name"`：路由参数
   - `query:"name"`：查询参数
-- 支持以下字段类型解析：
+- `path`/`query` 支持的标量类型：
   - `string`
   - 有符号整数（`int`、`int8`、`int16`、`int32`、`int64`）
   - 无符号整数（`uint`、`uint8`、`uint16`、`uint32`、`uint64`）
@@ -35,29 +35,31 @@ import (
     "github.com/gin-gonic/gin"
 )
 
-type GetUserRequest struct {
-    ID      int    `path:"id"`
-    Keyword string `query:"keyword"`
-    Active  bool   `query:"active"`
-    Name    string `json:"name"`
+type Address struct {
+    City    string `json:"city"`
+    Country string `json:"country"`
+}
+
+type CreateOrderRequest struct {
+    UserID  int               `path:"user_id"`
+    Page    int               `query:"page"`
+    Name    string            `json:"name"`
+    Tags    []string          `json:"tags"`
+    Meta    map[string]string `json:"meta"`
+    Address Address           `json:"address"`
+    Items   []Address         `json:"items"`
 }
 
 func main() {
     r := gin.Default()
 
-    r.POST("/users/:id", func(c *gin.Context) {
-        var req GetUserRequest
+    r.POST("/users/:user_id/orders", func(c *gin.Context) {
+        var req CreateOrderRequest
         if err := _http.Parse(c, &req); err != nil {
             c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
             return
         }
-
-        c.JSON(http.StatusOK, gin.H{
-            "id":      req.ID,
-            "keyword": req.Keyword,
-            "active":  req.Active,
-            "name":    req.Name,
-        })
+        c.JSON(http.StatusOK, req)
     })
 
     _ = r.Run(":8080")
@@ -66,16 +68,20 @@ func main() {
 
 ## 工作原理
 
-1. `Parse` 先调用 `c.ShouldBind(obj)`，绑定请求体或表单数据。
-2. 使用反射遍历结构体字段。
-3. 读取每个字段的 `path`/`query` 标签，把字符串参数转换为对应字段类型。
-4. 转换失败时直接返回错误。
+1. `Parse` 先调用 `c.ShouldBind(obj)`，绑定所有 `json`/`form` 标签字段，支持任意深度的嵌套 struct、map、slice。
+2. 使用反射遍历顶层结构体字段。
+3. 对每个标量字段读取 `path`/`query` 标签，将字符串参数转换为对应字段类型。
+4. 非标量字段（`struct`、`map`、`slice` 等）直接跳过——`ShouldBind` 已完成填充。
 
 ## 标签行为说明
 
-- 字段没有 `path`/`query` 标签时，`ShouldBind` 后不会被二次覆盖。
-- 标签存在但参数值为空时，不会覆盖数值/布尔/浮点字段。
-- 遇到不支持的字段类型会返回错误。
+| 标签 | 数据来源 | 适用范围 |
+|---|---|---|
+| `json:"name"` | 请求体 | 任意类型，任意嵌套深度 |
+| `path:"name"` | 路由参数 | 仅顶层标量字段 |
+| `query:"name"` | URL 查询参数 | 仅顶层标量字段 |
+
+- `path`/`query` 参数值为空时，不会覆盖数值/布尔/浮点字段。
 
 ## API
 
