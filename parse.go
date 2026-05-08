@@ -15,19 +15,21 @@ const (
 // Parse binds request data (JSON/form/query) and extracts path/query parameters into the struct.
 // JSON body binding (including nested structs, maps, slices) is handled by ShouldBind.
 // path/query tags are only supported on top-level scalar fields (string, int, uint, bool, float).
+// After all fields are populated, the struct is automatically validated using the global validator instance.
 //
 // Example:
 //
 //	type Request struct {
 //	    ID     int               `path:"id"`
-//	    Page   int               `query:"page"`
-//	    Name   string            `json:"name"`
+//	    Page   int               `query:"page" validate:"required,min=1"`
+//	    Name   string            `json:"name" validate:"required"`
+//	    Phone  string            `json:"phone" validate:"phone"`
 //	    Tags   []string          `json:"tags"`
 //	    Meta   map[string]string `json:"meta"`
 //	}
 //	var req Request
 //	if err := Parse(c, &req); err != nil {
-//	    // handle error
+//	    // handle binding, parsing, or validation error
 //	}
 func Parse[T any](c *gin.Context, obj *T) error {
 	if err := c.ShouldBind(obj); err != nil {
@@ -44,7 +46,7 @@ func Parse[T any](c *gin.Context, obj *T) error {
 			return err
 		}
 	}
-	return nil
+	return ValidateStruct(obj)
 }
 
 // parseField handles path/query tag injection for scalar fields.

@@ -16,6 +16,7 @@
   - 无符号整数（`uint`、`uint8`、`uint16`、`uint32`、`uint64`）
   - `bool`
   - 浮点数（`float32`、`float64`）
+- 使用 `validate` 标签自动校验，基于 [go-playground/validator](https://github.com/go-playground/validator)。
 
 ## 安装
 
@@ -42,8 +43,9 @@ type Address struct {
 
 type CreateOrderRequest struct {
     UserID  int               `path:"user_id"`
-    Page    int               `query:"page"`
-    Name    string            `json:"name"`
+    Page    int               `query:"page" validate:"required,min=1"`
+    Name    string            `json:"name" validate:"required"`
+    Phone   string            `json:"phone" validate:"phone"`
     Tags    []string          `json:"tags"`
     Meta    map[string]string `json:"meta"`
     Address Address           `json:"address"`
@@ -72,6 +74,7 @@ func main() {
 2. 使用反射遍历顶层结构体字段。
 3. 对每个标量字段读取 `path`/`query` 标签，将字符串参数转换为对应字段类型。
 4. 非标量字段（`struct`、`map`、`slice` 等）直接跳过——`ShouldBind` 已完成填充。
+5. 最后使用全局 validator 实例对整个结构体进行 `validate` 标签校验。
 
 ## 标签行为说明
 
@@ -80,8 +83,11 @@ func main() {
 | `json:"name"` | 请求体 | 任意类型，任意嵌套深度 |
 | `path:"name"` | 路由参数 | 仅顶层标量字段 |
 | `query:"name"` | URL 查询参数 | 仅顶层标量字段 |
+| `validate:"rule"` | 校验规则 | 任意字段 |
 
 - `path`/`query` 参数值为空时，不会覆盖数值/布尔/浮点字段。
+- 内置校验规则：`required`、`min`、`max`、`email`、`url` 等，详见 [validator 文档](https://pkg.go.dev/github.com/go-playground/validator/v10)。
+- 已注册自定义校验器 `phone`，用于校验中国大陆手机号（格式：`1[3-9]xxxxxxxxx`）。
 
 ## API
 

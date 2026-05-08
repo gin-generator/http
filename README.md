@@ -16,6 +16,7 @@ A lightweight helper for Gin that binds request body data and parses `path`/`que
   - unsigned integers (`uint`, `uint8`, `uint16`, `uint32`, `uint64`)
   - `bool`
   - floating numbers (`float32`, `float64`)
+- Automatic validation using `validate` tags powered by [go-playground/validator](https://github.com/go-playground/validator).
 
 ## Installation
 
@@ -42,8 +43,9 @@ type Address struct {
 
 type CreateOrderRequest struct {
     UserID  int               `path:"user_id"`
-    Page    int               `query:"page"`
-    Name    string            `json:"name"`
+    Page    int               `query:"page" validate:"required,min=1"`
+    Name    string            `json:"name" validate:"required"`
+    Phone   string            `json:"phone" validate:"phone"`
     Tags    []string          `json:"tags"`
     Meta    map[string]string `json:"meta"`
     Address Address           `json:"address"`
@@ -72,6 +74,7 @@ func main() {
 2. It then iterates through the top-level struct fields via reflection.
 3. For each scalar field, it checks `path` and `query` tags and converts string values into the field type.
 4. Non-scalar fields (`struct`, `map`, `slice`, etc.) are skipped — they are already populated by `ShouldBind`.
+5. Finally, it validates the entire struct using the global validator instance with `validate` tags.
 
 ## Tag behavior
 
@@ -80,8 +83,11 @@ func main() {
 | `json:"name"` | request body | any type, any nesting depth |
 | `path:"name"` | route parameter | top-level scalar fields only |
 | `query:"name"` | URL query string | top-level scalar fields only |
+| `validate:"rule"` | validation rule | any field |
 
 - If a `path`/`query` value is empty, numeric/bool/float fields are not overwritten.
+- Built-in validation rules: `required`, `min`, `max`, `email`, `url`, etc. See [validator docs](https://pkg.go.dev/github.com/go-playground/validator/v10).
+- Custom validator `phone` is registered for Chinese mobile phone numbers (format: `1[3-9]xxxxxxxxx`).
 
 ## API
 
