@@ -3,6 +3,7 @@ package http
 import (
 	"reflect"
 	"strconv"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 )
@@ -12,140 +13,106 @@ const (
 	tagQuery = "query"
 )
 
-// Parse binds request data (JSON/form/query) and extracts path/query parameters into the struct.
-// JSON body binding (including nested structs, maps, slices) is handled by ShouldBind.
-// path/query tags are only supported on top-level scalar fields (string, int, uint, bool, float).
-// After all fields are populated, the struct is automatically validated using the global validator instance.
-//
-// Example:
-//
-//	type Request struct {
-//	    ID     int               `path:"id"`
-//	    Page   int               `query:"page" validate:"required,min=1"`
-//	    Name   string            `json:"name" validate:"required"`
-//	    Phone  string            `json:"phone" validate:"phone"`
-//	    Tags   []string          `json:"tags"`
-//	    Meta   map[string]string `json:"meta"`
-//	}
-//	var req Request
-//	if err := Parse(c, &req); err != nil {
-//	    // handle binding, parsing, or validation error
-//	}
+type fieldMeta struct {
+	index    int
+	kind     reflect.Kind
+	pathTag  string
+	queryTag string
+}
+
+var metaCache sync.Map
+
+// getStructMeta builds and caches field metadata for path/query injection.
+// Only scalar fields with a path or query tag are included.
+func getStructMeta(t reflect.Type) []fieldMeta {
+	if v, ok := metaCache.Load(t); ok {
+		return v.([]fieldMeta)
+	}
+	fields := make([]fieldMeta, 0, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		pathTag := f.Tag.Get(tagPath)
+		queryTag := f.Tag.Get(tagQuery)
+		if pathTag == "" && queryTag == "" {
+			continue
+		}
+		kind := f.Type.Kind()
+		switch kind {
+		case reflect.String,
+			reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+			reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+			reflect.Bool,
+			reflect.Float32, reflect.Float64:
+			fields = append(fields, fieldMeta{
+				index:    i,
+				kind:     kind,
+				pathTag:  pathTag,
+				queryTag: queryTag,
+			})
+		default:
+			panic("unhandled default case")
+		}
+	}
+	metaCache.Store(t, fields)
+	return fields
+}
+
+// Parse binds request data (JSON/form/query) and injects path/query params.
+// JSON body and form fields are handled by ShouldBind via their respective tags.
+// path/query tags are supported on top-level scalar fields only.
+// The struct is validated after all fields are populated.
 func Parse[T any](c *gin.Context, obj *T) error {
 	if err := c.ShouldBind(obj); err != nil {
 		return err
 	}
 	val := reflect.ValueOf(obj).Elem()
-	typ := val.Type()
-	for i := 0; i < val.NumField(); i++ {
-		f := val.Field(i)
-		if !f.CanSet() {
-			continue
-		}
-		if err := parseField(c, &f, typ.Field(i).Tag); err != nil {
+	for _, meta := range getStructMeta(val.Type()) {
+		if err := setField(c, val.Field(meta.index), meta); err != nil {
 			return err
 		}
 	}
 	return ValidateStruct(obj)
 }
 
-// parseField handles path/query tag injection for scalar fields.
-// struct/map/slice fields are json-only and already populated by ShouldBind — skip them.
-func parseField(c *gin.Context, field *reflect.Value, tag reflect.StructTag) error {
-	switch field.Kind() {
-	case reflect.String:
-		return parseStringField(c, field, tag)
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return parseIntField(c, field, tag)
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return parseUintField(c, field, tag)
-	case reflect.Bool:
-		return parseBoolField(c, field, tag)
-	case reflect.Float32, reflect.Float64:
-		return parseFloatField(c, field, tag)
-	default:
-		// map, slice, interface, etc. — already handled by ShouldBind, skip.
+func setField(c *gin.Context, f reflect.Value, meta fieldMeta) error {
+	var raw string
+	if meta.pathTag != "" {
+		raw = c.Param(meta.pathTag)
+	} else if meta.queryTag != "" {
+		raw = c.Query(meta.queryTag)
+	}
+	if raw == "" {
 		return nil
 	}
-}
-
-func parseStringField(c *gin.Context, field *reflect.Value, tag reflect.StructTag) error {
-	if pathTag, ok := tag.Lookup(tagPath); ok {
-		field.SetString(c.Param(pathTag))
-	} else if queryTag, okk := tag.Lookup(tagQuery); okk {
-		field.SetString(c.Query(queryTag))
-	}
-	return nil
-}
-
-func parseIntField(c *gin.Context, field *reflect.Value, tag reflect.StructTag) error {
-	var value string
-	if pathTag, ok := tag.Lookup(tagPath); ok {
-		value = c.Param(pathTag)
-	} else if queryTag, okk := tag.Lookup(tagQuery); okk {
-		value = c.Query(queryTag)
-	}
-
-	if value != "" {
-		v, err := strconv.ParseInt(value, 10, 64)
+	switch meta.kind {
+	case reflect.String:
+		f.SetString(raw)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		v, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
 			return err
 		}
-		field.SetInt(v)
-	}
-	return nil
-}
-
-func parseUintField(c *gin.Context, field *reflect.Value, tag reflect.StructTag) error {
-	var value string
-	if pathTag, ok := tag.Lookup(tagPath); ok {
-		value = c.Param(pathTag)
-	} else if queryTag, okk := tag.Lookup(tagQuery); okk {
-		value = c.Query(queryTag)
-	}
-
-	if value != "" {
-		v, err := strconv.ParseUint(value, 10, 64)
+		f.SetInt(v)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		v, err := strconv.ParseUint(raw, 10, 64)
 		if err != nil {
 			return err
 		}
-		field.SetUint(v)
-	}
-	return nil
-}
-
-func parseBoolField(c *gin.Context, field *reflect.Value, tag reflect.StructTag) error {
-	var value string
-	if pathTag, ok := tag.Lookup(tagPath); ok {
-		value = c.Param(pathTag)
-	} else if queryTag, okk := tag.Lookup(tagQuery); okk {
-		value = c.Query(queryTag)
-	}
-
-	if value != "" {
-		v, err := strconv.ParseBool(value)
+		f.SetUint(v)
+	case reflect.Bool:
+		v, err := strconv.ParseBool(raw)
 		if err != nil {
 			return err
 		}
-		field.SetBool(v)
-	}
-	return nil
-}
-
-func parseFloatField(c *gin.Context, field *reflect.Value, tag reflect.StructTag) error {
-	var value string
-	if pathTag, ok := tag.Lookup(tagPath); ok {
-		value = c.Param(pathTag)
-	} else if queryTag, okk := tag.Lookup(tagQuery); okk {
-		value = c.Query(queryTag)
-	}
-
-	if value != "" {
-		v, err := strconv.ParseFloat(value, 64)
+		f.SetBool(v)
+	case reflect.Float32, reflect.Float64:
+		v, err := strconv.ParseFloat(raw, 64)
 		if err != nil {
 			return err
 		}
-		field.SetFloat(v)
+		f.SetFloat(v)
+	default:
+		panic("unhandled default case")
 	}
 	return nil
 }
